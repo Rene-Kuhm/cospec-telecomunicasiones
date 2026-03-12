@@ -1,58 +1,240 @@
 openapi: 3.0.3
 info:
   title: Cospec Telecomunicaciones API
-  version: 0.1.0
+  version: 1.0.0
   description: >-
-    API for ticketing, field operations, chat, evidence capture, exports, and AI helper.
+    REST API para gestión de tickets, operaciones de campo, chat, evidencias,
+    exportaciones y asistente IA. Todos los endpoints bajo /api/v1/.
+    Respuestas siempre en envelope { success, data, error, meta }.
 servers:
-  - url: https://api.cospec-telecom.local
-    description: Placeholder base URL
+  - url: https://api.cospec-telecom.local/api/v1
+    description: Development
+  - url: https://api.cospec-telecom.com/api/v1
+    description: Production
+
 security:
   - bearerAuth: []
+
 tags:
   - name: Auth
+    description: Autenticación, registro, tokens
   - name: Users
+    description: Gestión de técnicos y clientes
   - name: Tickets
+    description: Reclamos y órdenes de trabajo
   - name: Assignments
+    description: Asignación manual y automática
   - name: Status
+    description: Transiciones de estado del ticket
   - name: Appointments
+    description: Ventanas horarias y reprogramación
   - name: Messages
+    description: Chat del ticket
   - name: Attachments
+    description: Evidencias y adjuntos
   - name: Checklist
+    description: Checklist de cierre por ticket
   - name: Exports
+    description: Generación y descarga de reportes Excel/CSV
+  - name: Dashboard
+    description: Métricas y resúmenes por rol
+  - name: Events
+    description: Server-Sent Events para notificaciones en tiempo real
+  - name: Admin
+    description: Configuración de categorías y SLA (solo admin)
+  - name: Integrations
+    description: Integraciones externas (Telegram)
   - name: AI
+    description: Asistente IA contextual por ticket
+
 paths:
+
+  # ─── AUTH ────────────────────────────────────────────────────────────────────
+
+  /auth/register:
+    post:
+      tags: [Auth]
+      summary: Registro de cliente (self-service)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '201':
+          description: Cuenta creada. Email de verificación enviado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '429':
+          $ref: '#/components/responses/RateLimitError'
+
   /auth/login:
     post:
       tags: [Auth]
-      summary: Login and obtain tokens
+      summary: Login con email y contraseña
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: >-
+            Access token en body. Refresh token en cookie HttpOnly
+            (Set-Cookie: refresh_token=...; HttpOnly; Secure; SameSite=Strict).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+                example: refresh_token=<token>; HttpOnly; Secure; SameSite=Strict; Path=/api/v1/auth/refresh; Max-Age=604800
+        '401':
+          $ref: '#/components/responses/AuthError'
+        '429':
+          $ref: '#/components/responses/RateLimitError'
+
+  /auth/refresh:
+    post:
+      tags: [Auth]
+      summary: Renovar access token usando refresh token (cookie HttpOnly)
+      security: []
+      responses:
+        '200':
+          description: Nuevo par de tokens. Refresh token anterior invalidado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+        '401':
+          $ref: '#/components/responses/AuthError'
+
+  /auth/logout:
+    post:
+      tags: [Auth]
+      summary: Invalidar sesión actual
+      responses:
+        '200':
+          description: Sesión cerrada. Cookie borrada.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /auth/me:
+    get:
+      tags: [Auth]
+      summary: Obtener usuario autenticado actual
+      responses:
+        '200':
+          description: Usuario actual
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/AuthError'
+
+  /auth/verify-email:
+    post:
+      tags: [Auth]
+      summary: Verificar email con token recibido por correo
+      security: []
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [email, password]
+              required: [token]
               properties:
-                email: { type: string, format: email }
-                password: { type: string, format: password }
+                token: { type: string }
       responses:
         '200':
-          description: Tokens issued
+          description: Email verificado
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  access_token: { type: string }
-                  refresh_token: { type: string }
-        '401': { description: Invalid credentials }
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+
+  /auth/forgot-password:
+    post:
+      tags: [Auth]
+      summary: Solicitar reset de contraseña
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+      responses:
+        '200':
+          description: >-
+            Siempre retorna 200 para no revelar si el email existe.
+            Si existe, se envía email con token de reset (TTL 1h).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '429':
+          $ref: '#/components/responses/RateLimitError'
+
+  /auth/reset-password:
+    post:
+      tags: [Auth]
+      summary: Establecer nueva contraseña con token de reset
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, password]
+              properties:
+                token: { type: string }
+                password: { type: string, minLength: 8 }
+      responses:
+        '200':
+          description: Contraseña actualizada. Todos los refresh tokens del usuario invalidados.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+
+  # ─── USERS ───────────────────────────────────────────────────────────────────
 
   /users/tech:
     post:
       tags: [Users]
-      summary: Create technician (admin only)
-      security: [ { bearerAuth: [] } ]
+      summary: Crear técnico (solo admin)
       requestBody:
         required: true
         content:
@@ -61,41 +243,74 @@ paths:
               $ref: '#/components/schemas/TechCreateRequest'
       responses:
         '201':
-          description: Technician created
+          description: Técnico creado
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/User' }
-        '403': { description: Forbidden }
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/User'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '422':
+          $ref: '#/components/responses/ValidationError'
     get:
       tags: [Users]
-      summary: List technicians
-      security: [ { bearerAuth: [] } ]
+      summary: Listar técnicos (paginado)
       parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/LimitParam'
         - in: query
           name: zone
           schema: { type: string }
         - in: query
           name: active
           schema: { type: boolean }
+        - in: query
+          name: skill
+          schema: { type: string }
+          description: Filtrar por skill (contiene)
       responses:
         '200':
-          description: List of technicians
+          description: Lista paginada de técnicos
           content:
             application/json:
               schema:
-                type: array
-                items: { $ref: '#/components/schemas/User' }
+                allOf:
+                  - $ref: '#/components/schemas/ApiEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/PaginatedUsers'
 
   /users/tech/{id}:
+    get:
+      tags: [Users]
+      summary: Obtener técnico por ID
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: Técnico
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/User'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
     patch:
       tags: [Users]
-      summary: Update technician (admin only)
-      security: [ { bearerAuth: [] } ]
+      summary: Actualizar técnico (solo admin)
       parameters:
-        - in: path
-          name: id
-          required: true
-          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/IdPath'
       requestBody:
         required: true
         content:
@@ -103,31 +318,118 @@ paths:
             schema:
               $ref: '#/components/schemas/TechUpdateRequest'
       responses:
-        '200': { description: Updated, content: { application/json: { schema: { $ref: '#/components/schemas/User' } } } }
-        '404': { description: Not found }
+        '200':
+          description: Técnico actualizado
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/User'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
 
-  /tickets:
+  /users/customer:
     post:
-      tags: [Tickets]
-      summary: Create ticket (customer or admin)
-      security: [ { bearerAuth: [] } ]
+      tags: [Users]
+      summary: Crear cliente directamente (solo admin; saltea verificación de email)
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/TicketCreateRequest' }
+            schema:
+              $ref: '#/components/schemas/CustomerCreateRequest'
       responses:
-        '201': { description: Ticket created, content: { application/json: { schema: { $ref: '#/components/schemas/Ticket' } } } }
+        '201':
+          description: Cliente creado
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/User'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /users/{id}/resend-verification:
+    post:
+      tags: [Users]
+      summary: Reenviar email de verificación (admin o el propio usuario)
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: Email reenviado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+
+  # ─── TICKETS ─────────────────────────────────────────────────────────────────
+
+  /tickets:
+    post:
+      tags: [Tickets]
+      summary: Crear ticket (cliente o admin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TicketCreateRequest'
+      responses:
+        '201':
+          description: >-
+            Ticket creado con status='abierto'. Si lat/lon no se proveyeron,
+            geocoding_status='pending' y el bot de navegación estará deshabilitado
+            hasta resolución asíncrona.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/Ticket'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+          description: >-
+            403 si el cliente tiene email_verified=false
+            (code: AUTH_EMAIL_NOT_VERIFIED)
+        '422':
+          $ref: '#/components/responses/ValidationError'
     get:
       tags: [Tickets]
-      summary: List tickets
-      security: [ { bearerAuth: [] } ]
+      summary: Listar tickets (filtros + paginación)
+      description: >-
+        Admin ve todos. Técnico ve solo sus asignados. Cliente ve solo los suyos.
+        Soporta polling con updated_after para fallback SSE.
       parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/LimitParam'
         - in: query
           name: status
-          schema: { type: string }
+          schema:
+            $ref: '#/components/schemas/TicketStatus'
         - in: query
           name: priority
+          schema:
+            $ref: '#/components/schemas/TicketPriority'
+        - in: query
+          name: category
           schema: { type: string }
         - in: query
           name: zone
@@ -139,38 +441,88 @@ paths:
           name: customer_id
           schema: { type: string, format: uuid }
         - in: query
+          name: sla_breached
+          schema: { type: boolean }
+          description: Filtrar solo tickets con SLA incumplido
+        - in: query
           name: date_from
           schema: { type: string, format: date-time }
         - in: query
           name: date_to
           schema: { type: string, format: date-time }
+        - in: query
+          name: updated_after
+          schema: { type: string, format: date-time }
+          description: Fallback de polling — retorna tickets modificados después de esta fecha
       responses:
-        '200': { description: Tickets list, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Ticket' } } } } }
+        '200':
+          description: Lista paginada de tickets
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/PaginatedTickets'
 
   /tickets/{id}:
     get:
       tags: [Tickets]
-      summary: Get ticket by id
-      security: [ { bearerAuth: [] } ]
+      summary: Obtener ticket por ID
       parameters:
-        - in: path
-          name: id
-          required: true
-          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/IdPath'
       responses:
-        '200': { description: Ticket, content: { application/json: { schema: { $ref: '#/components/schemas/Ticket' } } } }
-        '404': { description: Not found }
+        '200':
+          description: Ticket completo
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/Ticket'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+    patch:
+      tags: [Tickets]
+      summary: Editar ticket (solo admin — para corregir lat/lon o campos básicos)
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TicketPatchRequest'
+      responses:
+        '200':
+          description: Ticket actualizado
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/Ticket'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+
+  # ─── ASSIGNMENTS ─────────────────────────────────────────────────────────────
 
   /tickets/{id}/assign:
     post:
       tags: [Assignments]
-      summary: Assign ticket to technician (admin)
-      security: [ { bearerAuth: [] } ]
+      summary: Asignar ticket a técnico manualmente (solo admin)
       parameters:
-        - in: path
-          name: id
-          required: true
-          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/IdPath'
       requestBody:
         required: true
         content:
@@ -179,221 +531,762 @@ paths:
               type: object
               required: [assigned_to]
               properties:
-                assigned_to: { type: string, format: uuid }
+                assigned_to:
+                  type: string
+                  format: uuid
+                  description: ID del técnico
       responses:
-        '200': { description: Assigned, content: { application/json: { schema: { $ref: '#/components/schemas/Ticket' } } } }
-        '404': { description: Not found }
+        '200':
+          description: >-
+            Ticket actualizado a status='asignado'. Notificación enviada al técnico
+            vía SSE y Telegram (si vinculado).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/Ticket'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /tickets/{id}/auto-assign:
+    post:
+      tags: [Assignments]
+      summary: Auto-asignación por scoring (zona, skills, carga, proximidad) — solo admin
+      description: >-
+        Algoritmo: filtra técnicos activos con skills y zona compatibles.
+        Score = 100 - (tickets_activos * 10) - distancia_km_al_ultimo_activo.
+        Elige el de mayor score. Si no hay candidatos retorna 422 ASSIGNMENT_NO_CANDIDATE.
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: Técnico seleccionado y asignado automáticamente
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/Ticket'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+          description: code=ASSIGNMENT_NO_CANDIDATE si no hay técnico elegible
+
+  # ─── STATUS ──────────────────────────────────────────────────────────────────
 
   /tickets/{id}/status:
     post:
       tags: [Status]
-      summary: Advance ticket status
-      security: [ { bearerAuth: [] } ]
+      summary: Avanzar estado del ticket
+      description: >-
+        Transiciones válidas:
+        asignado→en_ruta, en_ruta→en_sitio, en_sitio→en_trabajo,
+        en_trabajo→resuelto, resuelto→cerrado.
+        Cierre requiere checklist completo y ≥1 evidencia.
+        Admin puede retroceder a 'asignado' desde cualquier estado.
       parameters:
-        - in: path
-          name: id
-          required: true
-          schema: { type: string, format: uuid }
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: '#/components/schemas/StatusChangeRequest' }
-      responses:
-        '200': { description: Status updated, content: { application/json: { schema: { $ref: '#/components/schemas/Ticket' } } } }
-        '400': { description: Invalid transition }
-
-  /tickets/{id}/appointments:
-    get:
-      tags: [Appointments]
-      summary: List appointments for a ticket
-      security: [ { bearerAuth: [] } ]
-      parameters:
-        - in: path
-          name: id
-          required: true
-          schema: { type: string, format: uuid }
-      responses:
-        '200': { description: List, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Appointment' } } } } }
-    post:
-      tags: [Appointments]
-      summary: Create or update appointment window
-      security: [ { bearerAuth: [] } ]
-      parameters:
-        - in: path
-          name: id
-          required: true
-          schema: { type: string, format: uuid }
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: '#/components/schemas/AppointmentRequest' }
-      responses:
-        '200': { description: Saved, content: { application/json: { schema: { $ref: '#/components/schemas/Appointment' } } } }
-
-  /tickets/{id}/messages:
-    get:
-      tags: [Messages]
-      summary: List messages for a ticket
-      security: [ { bearerAuth: [] } ]
-      parameters:
-        - in: path
-          name: id
-          required: true
-          schema: { type: string, format: uuid }
-      responses:
-        '200': { description: Messages, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Message' } } } } }
-    post:
-      tags: [Messages]
-      summary: Post message to ticket chat
-      security: [ { bearerAuth: [] } ]
-      parameters:
-        - in: path
-          name: id
-          required: true
-          schema: { type: string, format: uuid }
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: '#/components/schemas/MessageCreateRequest' }
-      responses:
-        '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/Message' } } } }
-
-  /tickets/{id}/attachments:
-    get:
-      tags: [Attachments]
-      summary: List attachments
-      security: [ { bearerAuth: [] } ]
-      parameters:
-        - in: path
-          name: id
-          required: true
-          schema: { type: string, format: uuid }
-      responses:
-        '200': { description: Attachments, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Attachment' } } } } }
-    post:
-      tags: [Attachments]
-      summary: Request presigned URL to upload attachment
-      security: [ { bearerAuth: [] } ]
-      parameters:
-        - in: path
-          name: id
-          required: true
-          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/IdPath'
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              required: [content_type, filename, attachment_type]
-              properties:
-                content_type: { type: string }
-                filename: { type: string }
-                attachment_type: { type: string, enum: [photo, doc, note] }
+              $ref: '#/components/schemas/StatusChangeRequest'
       responses:
         '200':
-          description: Presigned URL response
+          description: Estado actualizado
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  upload_url: { type: string }
-                  download_url: { type: string }
+                allOf:
+                  - $ref: '#/components/schemas/ApiEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/Ticket'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+          description: code=TICKET_INVALID_TRANSITION
+        '422':
+          $ref: '#/components/responses/ValidationError'
+          description: code=TICKET_CHECKLIST_INCOMPLETE o TICKET_NO_EVIDENCE al intentar cerrar
+
+  # ─── APPOINTMENTS ─────────────────────────────────────────────────────────────
+
+  /tickets/{id}/appointments:
+    get:
+      tags: [Appointments]
+      summary: Listar citas del ticket (paginado)
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/LimitParam'
+      responses:
+        '200':
+          description: Citas del ticket
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/PaginatedAppointments'
+    post:
+      tags: [Appointments]
+      summary: Crear o reprogramar cita
+      description: >-
+        SLA no se resetea salvo que admin envíe sla_override=true.
+        Notifica técnico y cliente. Crea ticket_event(type='rescheduled').
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AppointmentRequest'
+      responses:
+        '200':
+          description: Cita guardada
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/Appointment'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  # ─── MESSAGES ────────────────────────────────────────────────────────────────
+
+  /tickets/{id}/messages:
+    get:
+      tags: [Messages]
+      summary: Listar mensajes del ticket (paginado, ordenado por created_at asc)
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/LimitParam'
+      responses:
+        '200':
+          description: Mensajes del ticket
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/PaginatedMessages'
+    post:
+      tags: [Messages]
+      summary: Enviar mensaje al chat del ticket
+      description: >-
+        Para adjuntar un archivo: primero POST /tickets/{id}/attachments para
+        obtener attachment_id, luego incluirlo en este endpoint.
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MessageCreateRequest'
+      responses:
+        '201':
+          description: Mensaje enviado
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/Message'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  # ─── ATTACHMENTS ─────────────────────────────────────────────────────────────
+
+  /tickets/{id}/attachments:
+    get:
+      tags: [Attachments]
+      summary: Listar evidencias del ticket
+      description: >-
+        Retorna URLs presignadas de descarga (TTL 1h) generadas en cada request.
+        storage_key nunca se expone. Solo participantes del ticket pueden acceder.
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: Evidencias con download_url presignada
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/Attachment'
+    post:
+      tags: [Attachments]
+      summary: Solicitar URL presignada para subir evidencia
+      description: >-
+        Flujo: POST este endpoint → recibe upload_url (PUT directo al bucket, TTL 15min)
+        + attachment_id + download_url. Frontend sube el archivo directamente al bucket.
+        No subir archivos a la API — solo al bucket via upload_url.
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AttachmentUploadRequest'
+      responses:
+        '200':
+          description: URLs de upload y download presignadas
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/AttachmentUploadResponse'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /tickets/{id}/attachments/{attachment_id}:
+    delete:
+      tags: [Attachments]
+      summary: Borrar evidencia (soft delete; solo si ticket no está cerrado)
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+        - in: path
+          name: attachment_id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Evidencia borrada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+          description: code=TICKET_ALREADY_CLOSED si el ticket ya está cerrado
+
+  # ─── CHECKLIST ───────────────────────────────────────────────────────────────
 
   /tickets/{id}/checklist:
     get:
       tags: [Checklist]
-      summary: Get checklist items
-      security: [ { bearerAuth: [] } ]
+      summary: Obtener items del checklist
       parameters:
-        - in: path
-          name: id
-          required: true
-          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/IdPath'
       responses:
-        '200': { description: Checklist, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/ChecklistItem' } } } } }
-    post:
+        '200':
+          description: Items del checklist
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/ChecklistItem'
+    patch:
       tags: [Checklist]
-      summary: Update checklist statuses
-      security: [ { bearerAuth: [] } ]
+      summary: Actualizar estado de items del checklist (por ID)
+      description: >-
+        Identificar items por su UUID (id), no por texto.
+        Solo técnico asignado y admin pueden actualizar.
       parameters:
-        - in: path
-          name: id
-          required: true
-          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/IdPath'
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: array
-              items: { $ref: '#/components/schemas/ChecklistUpdateItem' }
+              items:
+                $ref: '#/components/schemas/ChecklistUpdateItem'
+              minItems: 1
       responses:
-        '200': { description: Updated }
+        '200':
+          description: Checklist actualizado
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/ChecklistItem'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  # ─── EXPORTS ─────────────────────────────────────────────────────────────────
 
   /exports/run:
     post:
       tags: [Exports]
-      summary: Trigger export job (admin)
-      security: [ { bearerAuth: [] } ]
+      summary: Disparar job de exportación manualmente (solo admin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExportRunRequest'
+      responses:
+        '202':
+          description: >-
+            Job encolado. status='scheduled'. El admin recibirá SSE export.completed
+            cuando finalice. Usar GET /exports/{id} para polling del estado.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/Export'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+
+  /exports:
+    get:
+      tags: [Exports]
+      summary: Listar exportaciones (paginado)
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/LimitParam'
+        - in: query
+          name: kind
+          schema: { type: string, enum: [daily, monthly, annual] }
+        - in: query
+          name: status
+          schema: { type: string, enum: [scheduled, running, completed, failed] }
+      responses:
+        '200':
+          description: Lista paginada de exportaciones
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/PaginatedExports'
+
+  /exports/{id}:
+    get:
+      tags: [Exports]
+      summary: Obtener metadata y URL de descarga de exportación
+      description: >-
+        Si status='completed', data.download_url contiene una URL presignada (TTL 1h)
+        generada en cada request. La URL no se almacena en DB.
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: Exportación con download_url si completada
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/Export'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+
+  # ─── DASHBOARD ───────────────────────────────────────────────────────────────
+
+  /dashboard/admin:
+    get:
+      tags: [Dashboard]
+      summary: Dashboard de administrador
+      description: Solo admin. Métricas de tickets, SLA, productividad de técnicos, notificaciones.
+      responses:
+        '200':
+          description: Métricas de admin
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/AdminDashboard'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+
+  /dashboard/tech:
+    get:
+      tags: [Dashboard]
+      summary: Dashboard de técnico (tickets propios)
+      description: Solo técnico. Tickets asignados, próximas citas, checklists pendientes.
+      responses:
+        '200':
+          description: Métricas del técnico
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/TechDashboard'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+
+  # ─── EVENTS (SSE) ─────────────────────────────────────────────────────────────
+
+  /events:
+    get:
+      tags: [Events]
+      summary: Stream de eventos en tiempo real (Server-Sent Events)
+      description: >-
+        Conectar con Accept: text/event-stream.
+        Auth: Bearer token en Authorization header O query param ?token=<access_token>
+        (necesario para EventSource de browser que no soporta headers custom).
+        Formato por evento:
+          id: <uuid>
+          event: <tipo>
+          data: <json>
+        El server emite un comentario keep-alive (: ping) cada 30s.
+        Reconexión automática: proveer Last-Event-ID para recibir eventos perdidos (ventana 30s).
+        Tipos de evento: ticket.created, ticket.assigned, ticket.status_changed,
+        ticket.message_added, ticket.rescheduled, ticket.sla_breach, ticket.geocoded,
+        export.completed.
+      parameters:
+        - in: query
+          name: token
+          schema: { type: string }
+          description: Access token (alternativa al header Authorization para EventSource)
+      responses:
+        '200':
+          description: Stream SSE establecido
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                example: |
+                  id: 550e8400-e29b-41d4-a716-446655440000
+                  event: ticket.assigned
+                  data: {"ticket_id":"...","assigned_to":"...","title":"...","timestamp":"..."}
+
+        '401':
+          $ref: '#/components/responses/AuthError'
+
+  # ─── ADMIN CONFIG ─────────────────────────────────────────────────────────────
+
+  /admin/categories:
+    get:
+      tags: [Admin]
+      summary: Listar categorías de tickets (solo admin)
+      parameters:
+        - in: query
+          name: active
+          schema: { type: boolean }
+      responses:
+        '200':
+          description: Categorías configuradas
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/Category'
+    post:
+      tags: [Admin]
+      summary: Crear categoría (solo admin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CategoryCreateRequest'
+      responses:
+        '201':
+          description: Categoría creada
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/Category'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /admin/categories/{id}:
+    patch:
+      tags: [Admin]
+      summary: Actualizar categoría (solo admin)
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CategoryCreateRequest'
+      responses:
+        '200':
+          description: Categoría actualizada
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/Category'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+    delete:
+      tags: [Admin]
+      summary: Desactivar categoría (soft, solo admin)
+      description: No se puede eliminar si hay tickets activos en esa categoría.
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: Categoría desactivada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+          description: code=CATEGORY_HAS_ACTIVE_TICKETS
+
+  /admin/sla-config:
+    get:
+      tags: [Admin]
+      summary: Obtener configuración de SLA global y por categoría (solo admin)
+      responses:
+        '200':
+          description: Configuración SLA
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/SLAConfig'
+    put:
+      tags: [Admin]
+      summary: Actualizar reglas SLA por categoría y prioridad (solo admin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SLAConfig'
+      responses:
+        '200':
+          description: Configuración SLA actualizada
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/SLAConfig'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  # ─── INTEGRATIONS (TELEGRAM) ──────────────────────────────────────────────────
+
+  /integrations/telegram/link-code:
+    get:
+      tags: [Integrations]
+      summary: Generar código temporal para vincular cuenta de Telegram (TTL 10 min)
+      description: >-
+        El usuario ejecuta /vincular <codigo> en el bot de Telegram.
+        El bot llama /integrations/telegram/link para completar la vinculación.
+      responses:
+        '200':
+          description: Código de vinculación
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          code: { type: string, example: "482931" }
+                          expires_at: { type: string, format: date-time }
+                          bot_username: { type: string, example: "CospecBot" }
+
+  /integrations/telegram/link:
+    post:
+      tags: [Integrations]
+      summary: Confirmar vinculación Telegram (llamado por el bot)
+      description: >-
+        Validar X-Telegram-Bot-Api-Secret-Token header.
+        Asocia chat_id con el user dueño del código temporal.
+      security:
+        - telegramBotSecret: []
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [kind]
+              required: [chat_id, code]
               properties:
-                kind: { type: string, enum: [daily, monthly, annual] }
-                period_date: { type: string, format: date }
+                chat_id: { type: string }
+                code: { type: string }
       responses:
-        '202': { description: Export scheduled, content: { application/json: { schema: { $ref: '#/components/schemas/Export' } } } }
+        '200':
+          description: Cuenta vinculada exitosamente
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+          description: code=TELEGRAM_CODE_INVALID o TELEGRAM_CODE_EXPIRED
 
-  /exports:
-    get:
-      tags: [Exports]
-      summary: List exports
-      security: [ { bearerAuth: [] } ]
+  /integrations/telegram/unlink:
+    delete:
+      tags: [Integrations]
+      summary: Desvincular cuenta de Telegram del usuario autenticado
       responses:
-        '200': { description: Exports, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Export' } } } } }
+        '200':
+          description: Cuenta desvinculada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
 
-  /exports/{id}:
-    get:
-      tags: [Exports]
-      summary: Get export metadata
-      security: [ { bearerAuth: [] } ]
-      parameters:
-        - in: path
-          name: id
-          required: true
-          schema: { type: string, format: uuid }
-      responses:
-        '200': { description: Export, content: { application/json: { schema: { $ref: '#/components/schemas/Export' } } } }
-        '404': { description: Not found }
-
-  /tickets/{id}/ai-query:
+  /integrations/telegram/webhook:
     post:
-      tags: [AI]
-      summary: Ask a ticket-scoped question (Minimax/free provider)
-      security: [ { bearerAuth: [] } ]
-      parameters:
-        - in: path
-          name: id
-          required: true
-          schema: { type: string, format: uuid }
+      tags: [Integrations]
+      summary: Webhook receptor de updates de Telegram (solo Telegram puede llamar esto)
+      description: >-
+        Validar X-Telegram-Bot-Api-Secret-Token. Procesar comandos:
+        /en_ruta, /en_sitio, /estado, /responder, /vincular, /ayuda.
+      security:
+        - telegramBotSecret: []
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/AIQueryRequest' }
+            schema:
+              $ref: '#/components/schemas/TelegramWebhookPayload'
       responses:
-        '200': { description: AI answer, content: { application/json: { schema: { $ref: '#/components/schemas/AIQueryResponse' } } } }
-        '400': { description: Invalid request }
-        '404': { description: Ticket not found }
+        '200':
+          description: Update procesado (Telegram siempre espera 200)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+
+  # ─── AI ──────────────────────────────────────────────────────────────────────
+
+  /tickets/{id}/ai-query:
+    post:
+      tags: [AI]
+      summary: Consulta al asistente IA contextualizado al ticket
+      description: >-
+        El asistente solo tiene acceso al contexto del ticket específico
+        (estado, historial, checklist, eventos). No tiene acceso a otros tickets.
+        Timeout de 10s; si el provider tarda más retorna 504.
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AIQueryRequest'
+      responses:
+        '200':
+          description: Respuesta del asistente
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/AIQueryResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '504':
+          description: Timeout del provider de IA
+
+# ─── COMPONENTS ──────────────────────────────────────────────────────────────
 
 components:
   securitySchemes:
@@ -401,7 +1294,227 @@ components:
       type: http
       scheme: bearer
       bearerFormat: JWT
+      description: >-
+        Access token JWT (TTL 15 min). Obtener via POST /auth/login o POST /auth/refresh.
+    telegramBotSecret:
+      type: apiKey
+      in: header
+      name: X-Telegram-Bot-Api-Secret-Token
+      description: Secret configurado en TELEGRAM_WEBHOOK_SECRET env var.
+
+  parameters:
+    IdPath:
+      in: path
+      name: id
+      required: true
+      schema: { type: string, format: uuid }
+    PageParam:
+      in: query
+      name: page
+      schema: { type: integer, minimum: 1, default: 1 }
+    LimitParam:
+      in: query
+      name: limit
+      schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+
+  responses:
+    AuthError:
+      description: No autenticado o token inválido/expirado
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          example:
+            success: false
+            data: null
+            error:
+              type: AuthError
+              code: AUTH_TOKEN_EXPIRED
+              message: "El access token ha expirado."
+              trace_id: "abc-123"
+              timestamp: "2026-03-11T10:00:00Z"
+            meta:
+              timestamp: "2026-03-11T10:00:00Z"
+              version: "v1"
+    ForbiddenError:
+      description: Sin permisos suficientes para esta operación
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    NotFoundError:
+      description: Recurso no encontrado
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    BadRequestError:
+      description: Petición inválida o regla de negocio violada
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    ValidationError:
+      description: Error de validación de campos
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ValidationErrorEnvelope'
+    RateLimitError:
+      description: Rate limit excedido
+      headers:
+        Retry-After:
+          schema: { type: integer }
+          description: Segundos hasta que el rate limit se resetea
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+
   schemas:
+
+    # ─── ENVELOPE ────────────────────────────────────────────────────────────
+
+    ResponseMeta:
+      type: object
+      required: [timestamp, version]
+      properties:
+        timestamp: { type: string, format: date-time }
+        version: { type: string, example: "v1" }
+
+    ApiEnvelope:
+      type: object
+      required: [success, data, error, meta]
+      properties:
+        success: { type: boolean, example: true }
+        data: {}
+        error: { nullable: true, example: null }
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+
+    ErrorDetail:
+      type: object
+      required: [type, code, message, trace_id, timestamp]
+      properties:
+        type:
+          type: string
+          enum: [ValidationError, AuthError, ForbiddenError, NotFoundError,
+                 ConflictError, RateLimitError, InternalError, ExternalSvcError]
+        code: { type: string, example: "TICKET_INVALID_TRANSITION" }
+        message: { type: string }
+        trace_id: { type: string, format: uuid }
+        timestamp: { type: string, format: date-time }
+
+    ErrorEnvelope:
+      type: object
+      required: [success, data, error, meta]
+      properties:
+        success: { type: boolean, example: false }
+        data: { nullable: true, example: null }
+        error:
+          $ref: '#/components/schemas/ErrorDetail'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+
+    ValidationErrorDetail:
+      allOf:
+        - $ref: '#/components/schemas/ErrorDetail'
+        - type: object
+          properties:
+            errors:
+              type: array
+              description: Lista de errores de campo individuales
+              items:
+                type: object
+                properties:
+                  field: { type: string, example: "email" }
+                  message: { type: string, example: "Formato de email inválido" }
+
+    ValidationErrorEnvelope:
+      type: object
+      required: [success, data, error, meta]
+      properties:
+        success: { type: boolean, example: false }
+        data: { nullable: true, example: null }
+        error:
+          $ref: '#/components/schemas/ValidationErrorDetail'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+
+    SuccessResponse:
+      type: object
+      required: [success, data, error, meta]
+      properties:
+        success: { type: boolean, example: true }
+        data: { type: object, example: {} }
+        error: { nullable: true, example: null }
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+
+    PageMeta:
+      type: object
+      required: [page, limit, total, total_pages]
+      properties:
+        page: { type: integer, example: 1 }
+        limit: { type: integer, example: 20 }
+        total: { type: integer, example: 87 }
+        total_pages: { type: integer, example: 5 }
+
+    # ─── ENUMS ───────────────────────────────────────────────────────────────
+
+    TicketStatus:
+      type: string
+      enum: [abierto, asignado, en_ruta, en_sitio, en_trabajo, resuelto, cerrado]
+
+    TicketPriority:
+      type: string
+      enum: [low, medium, high, critical]
+
+    GeocodingStatus:
+      type: string
+      enum: [pending, done, failed]
+      description: >-
+        pending = lat/lon no provistos, geocoding encolado.
+        done = lat/lon disponibles, navegación habilitada.
+        failed = geocoding falló tras 3 intentos; requiere corrección manual.
+
+    # ─── AUTH ────────────────────────────────────────────────────────────────
+
+    RegisterRequest:
+      type: object
+      required: [name, email, password, phone]
+      properties:
+        name: { type: string, minLength: 2, maxLength: 100 }
+        email: { type: string, format: email }
+        password: { type: string, minLength: 8, maxLength: 72, format: password }
+        phone: { type: string, pattern: '^\+?[0-9\s\-]{7,20}$' }
+
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string, format: password }
+
+    AuthResponse:
+      type: object
+      required: [success, data, error, meta]
+      properties:
+        success: { type: boolean, example: true }
+        data:
+          type: object
+          properties:
+            access_token: { type: string }
+            token_type: { type: string, example: "Bearer" }
+            expires_in: { type: integer, example: 900, description: "Segundos hasta expiración del access token" }
+            user:
+              $ref: '#/components/schemas/User'
+        error: { nullable: true, example: null }
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+
+    # ─── USERS ───────────────────────────────────────────────────────────────
+
     User:
       type: object
       properties:
@@ -410,29 +1523,63 @@ components:
         name: { type: string }
         email: { type: string, format: email }
         phone: { type: string }
-        zone: { type: string }
-        skills: { type: array, items: { type: string } }
+        zone:
+          type: string
+          nullable: true
+          description: Solo aplica a técnicos
+        skills:
+          type: array
+          items: { type: string }
+          description: Solo aplica a técnicos
         active: { type: boolean }
+        email_verified: { type: boolean }
+        telegram_linked: { type: boolean, description: "True si tiene cuenta de Telegram vinculada" }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
 
     TechCreateRequest:
       type: object
       required: [name, email, phone, zone, skills]
       properties:
-        name: { type: string }
+        name: { type: string, minLength: 2 }
         email: { type: string, format: email }
         phone: { type: string }
         zone: { type: string }
-        skills: { type: array, items: { type: string } }
+        skills:
+          type: array
+          items: { type: string }
+          minItems: 1
         active: { type: boolean, default: true }
 
     TechUpdateRequest:
       type: object
+      minProperties: 1
       properties:
         name: { type: string }
         phone: { type: string }
         zone: { type: string }
         skills: { type: array, items: { type: string } }
         active: { type: boolean }
+
+    CustomerCreateRequest:
+      type: object
+      required: [name, email, phone]
+      properties:
+        name: { type: string, minLength: 2 }
+        email: { type: string, format: email }
+        phone: { type: string }
+        send_welcome_email: { type: boolean, default: true }
+
+    PaginatedUsers:
+      type: object
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/User' }
+        meta:
+          $ref: '#/components/schemas/PageMeta'
+
+    # ─── TICKETS ─────────────────────────────────────────────────────────────
 
     Ticket:
       type: object
@@ -441,14 +1588,28 @@ components:
         title: { type: string }
         description: { type: string }
         category: { type: string }
-        priority: { type: string }
-        status: { type: string }
+        priority:
+          $ref: '#/components/schemas/TicketPriority'
+        status:
+          $ref: '#/components/schemas/TicketStatus'
         sla_due_at: { type: string, format: date-time }
+        sla_breached:
+          type: boolean
+          description: Calculado en query — true si NOW() > sla_due_at y no está resuelto/cerrado
+        sla_override: { type: boolean }
+        geocoding_status:
+          $ref: '#/components/schemas/GeocodingStatus'
         customer_id: { type: string, format: uuid }
         assigned_to: { type: string, format: uuid, nullable: true }
         address: { type: string }
-        lat: { type: number, format: double }
-        lon: { type: number, format: double }
+        lat: { type: number, format: double, nullable: true }
+        lon: { type: number, format: double, nullable: true }
+        navigation_url:
+          type: string
+          nullable: true
+          description: >-
+            Deep link a Google Maps. Solo presente si geocoding_status='done'.
+            Formato: https://www.google.com/maps/dir/?api=1&destination={lat},{lon}
         window_start: { type: string, format: date-time, nullable: true }
         window_end: { type: string, format: date-time, nullable: true }
         created_at: { type: string, format: date-time }
@@ -459,22 +1620,61 @@ components:
       type: object
       required: [title, description, category, priority, address]
       properties:
-        title: { type: string }
-        description: { type: string }
-        category: { type: string }
-        priority: { type: string, enum: [low, medium, high, critical] }
-        address: { type: string }
-        lat: { type: number, format: double, nullable: true }
-        lon: { type: number, format: double, nullable: true }
+        title: { type: string, minLength: 5, maxLength: 200 }
+        description: { type: string, minLength: 10 }
+        category:
+          type: string
+          description: Debe corresponder a un category.slug activo
+        priority:
+          $ref: '#/components/schemas/TicketPriority'
+        address: { type: string, minLength: 5 }
+        lat: { type: number, format: double, nullable: true, minimum: -90, maximum: 90 }
+        lon: { type: number, format: double, nullable: true, minimum: -180, maximum: 180 }
         window_start: { type: string, format: date-time, nullable: true }
         window_end: { type: string, format: date-time, nullable: true }
+
+    TicketPatchRequest:
+      type: object
+      description: Solo admin. Para corregir lat/lon o campos básicos.
+      minProperties: 1
+      properties:
+        title: { type: string }
+        description: { type: string }
+        address: { type: string }
+        lat: { type: number, format: double }
+        lon: { type: number, format: double }
+        priority:
+          $ref: '#/components/schemas/TicketPriority'
+        sla_due_at: { type: string, format: date-time }
+
+    PaginatedTickets:
+      type: object
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Ticket' }
+        meta:
+          $ref: '#/components/schemas/PageMeta'
 
     StatusChangeRequest:
       type: object
       required: [next_status]
       properties:
-        next_status: { type: string, enum: [assigned, en_ruta, en_sitio, en_trabajo, resuelto, cerrado] }
-        timestamp: { type: string, format: date-time, nullable: true }
+        next_status:
+          type: string
+          enum: [en_ruta, en_sitio, en_trabajo, resuelto, cerrado, asignado]
+          description: >-
+            'asignado' solo disponible para admin (revertir a reasignación).
+            'cerrado' requiere checklist completo + ≥1 evidencia.
+        timestamp:
+          type: string
+          format: date-time
+          nullable: true
+          description: >-
+            Timestamp del evento real (ej. cuando el técnico salió al sitio).
+            Si no se provee, se usa NOW(). Útil para sincronizar timestamps de campo.
+
+    # ─── APPOINTMENTS ────────────────────────────────────────────────────────
 
     Appointment:
       type: object
@@ -483,9 +1683,12 @@ components:
         ticket_id: { type: string, format: uuid }
         window_start: { type: string, format: date-time }
         window_end: { type: string, format: date-time }
-        status: { type: string, enum: [pending, confirmed, rescheduled, cancelled] }
+        status:
+          type: string
+          enum: [pending, confirmed, rescheduled, cancelled]
         updated_by: { type: string, format: uuid }
         updated_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
 
     AppointmentRequest:
       type: object
@@ -493,7 +1696,27 @@ components:
       properties:
         window_start: { type: string, format: date-time }
         window_end: { type: string, format: date-time }
-        status: { type: string, enum: [pending, confirmed, rescheduled, cancelled], nullable: true }
+        status:
+          type: string
+          enum: [pending, confirmed, rescheduled, cancelled]
+          nullable: true
+        sla_override:
+          type: boolean
+          default: false
+          description: >-
+            Solo admin. Si true, actualiza sla_due_at al window_end de la nueva cita.
+            Permite reprogramar sin penalizar el SLA en casos justificados.
+
+    PaginatedAppointments:
+      type: object
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Appointment' }
+        meta:
+          $ref: '#/components/schemas/PageMeta'
+
+    # ─── MESSAGES ────────────────────────────────────────────────────────────
 
     Message:
       type: object
@@ -501,59 +1724,407 @@ components:
         id: { type: string, format: uuid }
         ticket_id: { type: string, format: uuid }
         sender_id: { type: string, format: uuid }
+        sender_name: { type: string, description: "Nombre del remitente (denormalizado para display)" }
         body: { type: string }
+        attachment_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: Referencia al attachment adjunto al mensaje (si aplica)
+        attachment:
+          nullable: true
+          description: Attachment inline si attachment_id no es nulo
+          allOf:
+            - $ref: '#/components/schemas/Attachment'
         created_at: { type: string, format: date-time }
 
     MessageCreateRequest:
       type: object
       required: [body]
       properties:
-        body: { type: string }
+        body:
+          type: string
+          minLength: 1
+          maxLength: 5000
+        attachment_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: >-
+            Primero crear el attachment vía POST /tickets/{id}/attachments,
+            luego incluir su ID aquí para adjuntarlo al mensaje.
+
+    PaginatedMessages:
+      type: object
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Message' }
+        meta:
+          $ref: '#/components/schemas/PageMeta'
+
+    # ─── ATTACHMENTS ─────────────────────────────────────────────────────────
 
     Attachment:
       type: object
+      description: >-
+        download_url es una URL presignada con TTL 1h generada en cada request GET.
+        storage_key nunca se expone. Solo participantes del ticket pueden obtener estas URLs.
       properties:
         id: { type: string, format: uuid }
         ticket_id: { type: string, format: uuid }
         uploader_id: { type: string, format: uuid }
-        url: { type: string }
-        type: { type: string, enum: [photo, doc, note] }
+        original_filename: { type: string }
+        content_type: { type: string }
+        type:
+          type: string
+          enum: [photo, doc, note]
+        download_url:
+          type: string
+          description: URL presignada de descarga (TTL 1h). Regenerada en cada request.
+        url_expires_at:
+          type: string
+          format: date-time
+          description: Cuándo expira download_url
         created_at: { type: string, format: date-time }
+
+    AttachmentUploadRequest:
+      type: object
+      required: [filename, content_type, attachment_type]
+      properties:
+        filename: { type: string }
+        content_type:
+          type: string
+          enum: [image/jpeg, image/png, image/heic, application/pdf, text/plain]
+        attachment_type:
+          type: string
+          enum: [photo, doc, note]
+
+    AttachmentUploadResponse:
+      type: object
+      properties:
+        attachment_id: { type: string, format: uuid }
+        upload_url:
+          type: string
+          description: URL presignada PUT para subir directamente al bucket (TTL 15 min)
+        upload_expires_at: { type: string, format: date-time }
+        download_url:
+          type: string
+          description: URL presignada GET para descargar (TTL 1h)
+        download_expires_at: { type: string, format: date-time }
+
+    # ─── CHECKLIST ───────────────────────────────────────────────────────────
 
     ChecklistItem:
       type: object
       properties:
-        item: { type: string }
-        status: { type: string, enum: [pending, done] }
-        updated_by: { type: string, format: uuid }
-        updated_at: { type: string, format: date-time }
+        id: { type: string, format: uuid }
+        ticket_id: { type: string, format: uuid }
+        item: { type: string, description: "Descripción del item del checklist" }
+        status:
+          type: string
+          enum: [pending, done]
+        updated_by: { type: string, format: uuid, nullable: true }
+        updated_at: { type: string, format: date-time, nullable: true }
+        created_at: { type: string, format: date-time }
 
     ChecklistUpdateItem:
       type: object
-      required: [item, status]
+      required: [id, status]
       properties:
-        item: { type: string }
-        status: { type: string, enum: [pending, done] }
+        id:
+          type: string
+          format: uuid
+          description: UUID del ChecklistItem a actualizar
+        status:
+          type: string
+          enum: [pending, done]
+
+    # ─── EXPORTS ─────────────────────────────────────────────────────────────
+
+    ExportRunRequest:
+      type: object
+      required: [kind]
+      properties:
+        kind:
+          type: string
+          enum: [daily, monthly, annual]
+        period_date:
+          type: string
+          format: date
+          description: >-
+            Fecha de referencia del período. Si no se provee:
+            daily → ayer, monthly → primer día del mes anterior, annual → primer día del año anterior.
 
     Export:
       type: object
       properties:
         id: { type: string, format: uuid }
         period_date: { type: string, format: date }
-        kind: { type: string, enum: [daily, monthly, annual] }
-        file_url: { type: string }
-        generated_at: { type: string, format: date-time }
-        status: { type: string, enum: [scheduled, running, completed, failed] }
+        kind:
+          type: string
+          enum: [daily, monthly, annual]
+        status:
+          type: string
+          enum: [scheduled, running, completed, failed]
+        error_message:
+          type: string
+          nullable: true
+          description: Causa del fallo si status='failed'
+        download_url:
+          type: string
+          nullable: true
+          description: URL presignada (TTL 1h) para descargar el XLSX. Solo si status='completed'.
+        download_expires_at:
+          type: string
+          format: date-time
+          nullable: true
+        triggered_by: { type: string, format: uuid }
+        generated_at: { type: string, format: date-time, nullable: true }
+        created_at: { type: string, format: date-time }
+
+    PaginatedExports:
+      type: object
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Export' }
+        meta:
+          $ref: '#/components/schemas/PageMeta'
+
+    # ─── DASHBOARD ───────────────────────────────────────────────────────────
+
+    SLABreachTicket:
+      type: object
+      properties:
+        ticket_id: { type: string, format: uuid }
+        title: { type: string }
+        category: { type: string }
+        priority:
+          $ref: '#/components/schemas/TicketPriority'
+        assigned_to: { type: string, format: uuid, nullable: true }
+        sla_due_at: { type: string, format: date-time }
+        overdue_hours: { type: number, format: double }
+
+    TechProductivity:
+      type: object
+      properties:
+        tech_id: { type: string, format: uuid }
+        name: { type: string }
+        closed_today: { type: integer }
+        closed_this_week: { type: integer }
+        reschedules: { type: integer }
+        avg_resolution_hours: { type: number, format: double }
+
+    AdminDashboard:
+      type: object
+      properties:
+        tickets_by_status:
+          type: object
+          description: Count de tickets por cada estado
+          additionalProperties: { type: integer }
+          example:
+            abierto: 12
+            asignado: 8
+            en_ruta: 3
+            en_sitio: 1
+            en_trabajo: 2
+            resuelto: 5
+            cerrado: 147
+        sla:
+          type: object
+          properties:
+            breach_count: { type: integer }
+            breach_rate_7d:
+              type: number
+              format: double
+              description: Ratio de breach en los últimos 7 días (0.0 - 1.0)
+            urgent_breaches:
+              type: array
+              items: { $ref: '#/components/schemas/SLABreachTicket' }
+              maxItems: 10
+        avg_resolution_hours:
+          type: object
+          properties:
+            by_category: { type: object, additionalProperties: { type: number } }
+            by_priority: { type: object, additionalProperties: { type: number } }
+        created_today: { type: integer }
+        created_this_week: { type: integer }
+        created_this_month: { type: integer }
+        tech_productivity:
+          type: array
+          items: { $ref: '#/components/schemas/TechProductivity' }
+        pending_exports: { type: integer }
+        notifications_failed_24h: { type: integer }
+
+    NextAppointment:
+      type: object
+      properties:
+        ticket_id: { type: string, format: uuid }
+        title: { type: string }
+        address: { type: string }
+        lat: { type: number, format: double, nullable: true }
+        lon: { type: number, format: double, nullable: true }
+        navigation_url: { type: string, nullable: true }
+        window_start: { type: string, format: date-time }
+        window_end: { type: string, format: date-time }
+        priority:
+          $ref: '#/components/schemas/TicketPriority'
+
+    PendingChecklist:
+      type: object
+      properties:
+        ticket_id: { type: string, format: uuid }
+        title: { type: string }
+        pending_count: { type: integer }
+        total_count: { type: integer }
+
+    TechDashboard:
+      type: object
+      properties:
+        my_tickets_by_status:
+          type: object
+          additionalProperties: { type: integer }
+          example:
+            asignado: 3
+            en_ruta: 1
+            en_sitio: 0
+            en_trabajo: 1
+        next_appointments:
+          type: array
+          items: { $ref: '#/components/schemas/NextAppointment' }
+          maxItems: 5
+        pending_checklists:
+          type: array
+          items: { $ref: '#/components/schemas/PendingChecklist' }
+        today_route:
+          type: array
+          description: Tickets de hoy ordenados por window_start
+          items: { $ref: '#/components/schemas/NextAppointment' }
+
+    # ─── ADMIN CONFIG ─────────────────────────────────────────────────────────
+
+    SLARule:
+      type: object
+      required: [priority, sla_hours]
+      properties:
+        priority:
+          $ref: '#/components/schemas/TicketPriority'
+        sla_hours:
+          type: integer
+          minimum: 1
+          example: 8
+
+    Category:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        slug: { type: string }
+        default_checklist:
+          type: array
+          items:
+            type: object
+            properties:
+              item: { type: string }
+        required_skills: { type: array, items: { type: string } }
+        sla_rules:
+          type: array
+          items: { $ref: '#/components/schemas/SLARule' }
+        active: { type: boolean }
+        created_at: { type: string, format: date-time }
+
+    CategoryCreateRequest:
+      type: object
+      required: [name, slug]
+      properties:
+        name: { type: string, minLength: 2 }
+        slug:
+          type: string
+          pattern: '^[a-z0-9_-]+$'
+          description: Identificador único (snake_case o kebab-case)
+        default_checklist:
+          type: array
+          items:
+            type: object
+            required: [item]
+            properties:
+              item: { type: string }
+        required_skills: { type: array, items: { type: string } }
+        sla_rules:
+          type: array
+          items: { $ref: '#/components/schemas/SLARule' }
+        active: { type: boolean, default: true }
+
+    SLAConfig:
+      type: object
+      description: >-
+        Configuración SLA por categoría. Si una categoría no tiene reglas específicas,
+        se aplican los defaults globales (critical=4h, high=8h, medium=24h, low=72h).
+      properties:
+        global_defaults:
+          type: object
+          properties:
+            critical_hours: { type: integer, default: 4 }
+            high_hours: { type: integer, default: 8 }
+            medium_hours: { type: integer, default: 24 }
+            low_hours: { type: integer, default: 72 }
+        by_category:
+          type: array
+          items:
+            type: object
+            properties:
+              category_slug: { type: string }
+              rules:
+                type: array
+                items: { $ref: '#/components/schemas/SLARule' }
+
+    # ─── INTEGRATIONS ─────────────────────────────────────────────────────────
+
+    TelegramWebhookPayload:
+      type: object
+      description: Payload estándar de Telegram Bot API (Update object)
+      properties:
+        update_id: { type: integer }
+        message:
+          type: object
+          nullable: true
+          properties:
+            message_id: { type: integer }
+            from:
+              type: object
+              properties:
+                id: { type: integer }
+                username: { type: string }
+                first_name: { type: string }
+            chat:
+              type: object
+              properties:
+                id: { type: integer }
+            text: { type: string }
+            date: { type: integer }
+
+    # ─── AI ──────────────────────────────────────────────────────────────────
 
     AIQueryRequest:
       type: object
-      required: [role, question]
+      required: [question]
       properties:
-        role: { type: string, enum: [admin, tech, customer] }
-        question: { type: string }
+        question:
+          type: string
+          minLength: 3
+          maxLength: 500
+          description: Pregunta sobre el ticket (estado, checklist, próximos pasos, etc.)
+
     AIQueryResponse:
       type: object
       properties:
         answer: { type: string }
-        source: { type: string, enum: [minimax] }
+        provider: { type: string, example: "minimax" }
         ticket_id: { type: string, format: uuid }
+        context_used:
+          type: array
+          description: Campos del ticket utilizados para generar la respuesta
+          items: { type: string }
+          example: ["status", "checklist", "ticket_events"]
+        response_time_ms: { type: integer }
