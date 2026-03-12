@@ -1,0 +1,559 @@
+openapi: 3.0.3
+info:
+  title: Cospec Telecomunicaciones API
+  version: 0.1.0
+  description: >-
+    API for ticketing, field operations, chat, evidence capture, exports, and AI helper.
+servers:
+  - url: https://api.cospec-telecom.local
+    description: Placeholder base URL
+security:
+  - bearerAuth: []
+tags:
+  - name: Auth
+  - name: Users
+  - name: Tickets
+  - name: Assignments
+  - name: Status
+  - name: Appointments
+  - name: Messages
+  - name: Attachments
+  - name: Checklist
+  - name: Exports
+  - name: AI
+paths:
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: Login and obtain tokens
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, format: password }
+      responses:
+        '200':
+          description: Tokens issued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  access_token: { type: string }
+                  refresh_token: { type: string }
+        '401': { description: Invalid credentials }
+
+  /users/tech:
+    post:
+      tags: [Users]
+      summary: Create technician (admin only)
+      security: [ { bearerAuth: [] } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TechCreateRequest'
+      responses:
+        '201':
+          description: Technician created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+        '403': { description: Forbidden }
+    get:
+      tags: [Users]
+      summary: List technicians
+      security: [ { bearerAuth: [] } ]
+      parameters:
+        - in: query
+          name: zone
+          schema: { type: string }
+        - in: query
+          name: active
+          schema: { type: boolean }
+      responses:
+        '200':
+          description: List of technicians
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/User' }
+
+  /users/tech/{id}:
+    patch:
+      tags: [Users]
+      summary: Update technician (admin only)
+      security: [ { bearerAuth: [] } ]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TechUpdateRequest'
+      responses:
+        '200': { description: Updated, content: { application/json: { schema: { $ref: '#/components/schemas/User' } } } }
+        '404': { description: Not found }
+
+  /tickets:
+    post:
+      tags: [Tickets]
+      summary: Create ticket (customer or admin)
+      security: [ { bearerAuth: [] } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TicketCreateRequest' }
+      responses:
+        '201': { description: Ticket created, content: { application/json: { schema: { $ref: '#/components/schemas/Ticket' } } } }
+    get:
+      tags: [Tickets]
+      summary: List tickets
+      security: [ { bearerAuth: [] } ]
+      parameters:
+        - in: query
+          name: status
+          schema: { type: string }
+        - in: query
+          name: priority
+          schema: { type: string }
+        - in: query
+          name: zone
+          schema: { type: string }
+        - in: query
+          name: assigned_to
+          schema: { type: string, format: uuid }
+        - in: query
+          name: customer_id
+          schema: { type: string, format: uuid }
+        - in: query
+          name: date_from
+          schema: { type: string, format: date-time }
+        - in: query
+          name: date_to
+          schema: { type: string, format: date-time }
+      responses:
+        '200': { description: Tickets list, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Ticket' } } } } }
+
+  /tickets/{id}:
+    get:
+      tags: [Tickets]
+      summary: Get ticket by id
+      security: [ { bearerAuth: [] } ]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: Ticket, content: { application/json: { schema: { $ref: '#/components/schemas/Ticket' } } } }
+        '404': { description: Not found }
+
+  /tickets/{id}/assign:
+    post:
+      tags: [Assignments]
+      summary: Assign ticket to technician (admin)
+      security: [ { bearerAuth: [] } ]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [assigned_to]
+              properties:
+                assigned_to: { type: string, format: uuid }
+      responses:
+        '200': { description: Assigned, content: { application/json: { schema: { $ref: '#/components/schemas/Ticket' } } } }
+        '404': { description: Not found }
+
+  /tickets/{id}/status:
+    post:
+      tags: [Status]
+      summary: Advance ticket status
+      security: [ { bearerAuth: [] } ]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/StatusChangeRequest' }
+      responses:
+        '200': { description: Status updated, content: { application/json: { schema: { $ref: '#/components/schemas/Ticket' } } } }
+        '400': { description: Invalid transition }
+
+  /tickets/{id}/appointments:
+    get:
+      tags: [Appointments]
+      summary: List appointments for a ticket
+      security: [ { bearerAuth: [] } ]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: List, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Appointment' } } } } }
+    post:
+      tags: [Appointments]
+      summary: Create or update appointment window
+      security: [ { bearerAuth: [] } ]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AppointmentRequest' }
+      responses:
+        '200': { description: Saved, content: { application/json: { schema: { $ref: '#/components/schemas/Appointment' } } } }
+
+  /tickets/{id}/messages:
+    get:
+      tags: [Messages]
+      summary: List messages for a ticket
+      security: [ { bearerAuth: [] } ]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: Messages, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Message' } } } } }
+    post:
+      tags: [Messages]
+      summary: Post message to ticket chat
+      security: [ { bearerAuth: [] } ]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MessageCreateRequest' }
+      responses:
+        '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/Message' } } } }
+
+  /tickets/{id}/attachments:
+    get:
+      tags: [Attachments]
+      summary: List attachments
+      security: [ { bearerAuth: [] } ]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: Attachments, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Attachment' } } } } }
+    post:
+      tags: [Attachments]
+      summary: Request presigned URL to upload attachment
+      security: [ { bearerAuth: [] } ]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [content_type, filename, attachment_type]
+              properties:
+                content_type: { type: string }
+                filename: { type: string }
+                attachment_type: { type: string, enum: [photo, doc, note] }
+      responses:
+        '200':
+          description: Presigned URL response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  upload_url: { type: string }
+                  download_url: { type: string }
+
+  /tickets/{id}/checklist:
+    get:
+      tags: [Checklist]
+      summary: Get checklist items
+      security: [ { bearerAuth: [] } ]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: Checklist, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/ChecklistItem' } } } } }
+    post:
+      tags: [Checklist]
+      summary: Update checklist statuses
+      security: [ { bearerAuth: [] } ]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items: { $ref: '#/components/schemas/ChecklistUpdateItem' }
+      responses:
+        '200': { description: Updated }
+
+  /exports/run:
+    post:
+      tags: [Exports]
+      summary: Trigger export job (admin)
+      security: [ { bearerAuth: [] } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [kind]
+              properties:
+                kind: { type: string, enum: [daily, monthly, annual] }
+                period_date: { type: string, format: date }
+      responses:
+        '202': { description: Export scheduled, content: { application/json: { schema: { $ref: '#/components/schemas/Export' } } } }
+
+  /exports:
+    get:
+      tags: [Exports]
+      summary: List exports
+      security: [ { bearerAuth: [] } ]
+      responses:
+        '200': { description: Exports, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Export' } } } } }
+
+  /exports/{id}:
+    get:
+      tags: [Exports]
+      summary: Get export metadata
+      security: [ { bearerAuth: [] } ]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: Export, content: { application/json: { schema: { $ref: '#/components/schemas/Export' } } } }
+        '404': { description: Not found }
+
+  /tickets/{id}/ai-query:
+    post:
+      tags: [AI]
+      summary: Ask a ticket-scoped question (Minimax/free provider)
+      security: [ { bearerAuth: [] } ]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AIQueryRequest' }
+      responses:
+        '200': { description: AI answer, content: { application/json: { schema: { $ref: '#/components/schemas/AIQueryResponse' } } } }
+        '400': { description: Invalid request }
+        '404': { description: Ticket not found }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    User:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        role: { type: string, enum: [admin, tech, customer] }
+        name: { type: string }
+        email: { type: string, format: email }
+        phone: { type: string }
+        zone: { type: string }
+        skills: { type: array, items: { type: string } }
+        active: { type: boolean }
+
+    TechCreateRequest:
+      type: object
+      required: [name, email, phone, zone, skills]
+      properties:
+        name: { type: string }
+        email: { type: string, format: email }
+        phone: { type: string }
+        zone: { type: string }
+        skills: { type: array, items: { type: string } }
+        active: { type: boolean, default: true }
+
+    TechUpdateRequest:
+      type: object
+      properties:
+        name: { type: string }
+        phone: { type: string }
+        zone: { type: string }
+        skills: { type: array, items: { type: string } }
+        active: { type: boolean }
+
+    Ticket:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        title: { type: string }
+        description: { type: string }
+        category: { type: string }
+        priority: { type: string }
+        status: { type: string }
+        sla_due_at: { type: string, format: date-time }
+        customer_id: { type: string, format: uuid }
+        assigned_to: { type: string, format: uuid, nullable: true }
+        address: { type: string }
+        lat: { type: number, format: double }
+        lon: { type: number, format: double }
+        window_start: { type: string, format: date-time, nullable: true }
+        window_end: { type: string, format: date-time, nullable: true }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        closed_at: { type: string, format: date-time, nullable: true }
+
+    TicketCreateRequest:
+      type: object
+      required: [title, description, category, priority, address]
+      properties:
+        title: { type: string }
+        description: { type: string }
+        category: { type: string }
+        priority: { type: string, enum: [low, medium, high, critical] }
+        address: { type: string }
+        lat: { type: number, format: double, nullable: true }
+        lon: { type: number, format: double, nullable: true }
+        window_start: { type: string, format: date-time, nullable: true }
+        window_end: { type: string, format: date-time, nullable: true }
+
+    StatusChangeRequest:
+      type: object
+      required: [next_status]
+      properties:
+        next_status: { type: string, enum: [assigned, en_ruta, en_sitio, en_trabajo, resuelto, cerrado] }
+        timestamp: { type: string, format: date-time, nullable: true }
+
+    Appointment:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        ticket_id: { type: string, format: uuid }
+        window_start: { type: string, format: date-time }
+        window_end: { type: string, format: date-time }
+        status: { type: string, enum: [pending, confirmed, rescheduled, cancelled] }
+        updated_by: { type: string, format: uuid }
+        updated_at: { type: string, format: date-time }
+
+    AppointmentRequest:
+      type: object
+      required: [window_start, window_end]
+      properties:
+        window_start: { type: string, format: date-time }
+        window_end: { type: string, format: date-time }
+        status: { type: string, enum: [pending, confirmed, rescheduled, cancelled], nullable: true }
+
+    Message:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        ticket_id: { type: string, format: uuid }
+        sender_id: { type: string, format: uuid }
+        body: { type: string }
+        created_at: { type: string, format: date-time }
+
+    MessageCreateRequest:
+      type: object
+      required: [body]
+      properties:
+        body: { type: string }
+
+    Attachment:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        ticket_id: { type: string, format: uuid }
+        uploader_id: { type: string, format: uuid }
+        url: { type: string }
+        type: { type: string, enum: [photo, doc, note] }
+        created_at: { type: string, format: date-time }
+
+    ChecklistItem:
+      type: object
+      properties:
+        item: { type: string }
+        status: { type: string, enum: [pending, done] }
+        updated_by: { type: string, format: uuid }
+        updated_at: { type: string, format: date-time }
+
+    ChecklistUpdateItem:
+      type: object
+      required: [item, status]
+      properties:
+        item: { type: string }
+        status: { type: string, enum: [pending, done] }
+
+    Export:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        period_date: { type: string, format: date }
+        kind: { type: string, enum: [daily, monthly, annual] }
+        file_url: { type: string }
+        generated_at: { type: string, format: date-time }
+        status: { type: string, enum: [scheduled, running, completed, failed] }
+
+    AIQueryRequest:
+      type: object
+      required: [role, question]
+      properties:
+        role: { type: string, enum: [admin, tech, customer] }
+        question: { type: string }
+    AIQueryResponse:
+      type: object
+      properties:
+        answer: { type: string }
+        source: { type: string, enum: [minimax] }
+        ticket_id: { type: string, format: uuid }
